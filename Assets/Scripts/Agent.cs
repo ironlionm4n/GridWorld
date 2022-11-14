@@ -22,6 +22,7 @@ public class Agent : MonoBehaviour
     [SerializeField] private List<Transform> wallsInGrid;
     [SerializeField] private Slider timeSlider;
     [SerializeField] private Button saveButton;
+    [SerializeField] private Button stopTrainingButton;
     [SerializeField] private Button loadButton;
     [SerializeField] private Training training;
     [SerializeField] private TMP_Text episodeText;
@@ -30,13 +31,24 @@ public class Agent : MonoBehaviour
     public QTable QTable => _qTable;
     private bool _hasHitWall = false;
     private bool _hasHitGoal = false;
-    private Direction _currentAction = Direction.Up;
+    private Direction _currentAction;
     private int _episodeCounter = 0;
     private int _stepCounter = 0;
+    private bool shouldTrain = true;
 
     private void Awake()
     {
         _qTable = new QTable();
+    }
+
+    public void StopGame()
+    {
+        StopAllCoroutines();
+    }
+
+    public void ResumeGame()
+    {
+        StartCoroutine(RestartGridWorld());
     }
 
     private void Start()
@@ -49,7 +61,7 @@ public class Agent : MonoBehaviour
     private IEnumerator BeginGridWorld()
     {
         SetAgentStartingPosition();
-        while (_episodeCounter < maxEpisodes || !_hasHitWall || !_hasHitGoal)
+        while (_episodeCounter < maxEpisodes)
         {
             if (_stepCounter >= maxStepsPerEpisode)
             {
@@ -74,8 +86,16 @@ public class Agent : MonoBehaviour
                 StopAllCoroutines();
                 StartCoroutine(RestartGridWorld());
             }
-            explorationExploitationThreshold = Mathf.Log( (_episodeCounter / maxEpisodes * 100) + 1f, maxEpisodes);
-            explorationExploitationThreshold += .1f;
+            //explorationExploitationThreshold = Mathf.Log( (_episodeCounter / maxEpisodes * 100) + 1f, maxEpisodes);
+            //explorationExploitationThreshold += .15f;
+            if (_episodeCounter < 100) explorationExploitationThreshold = 0;
+            if (_episodeCounter < 200) explorationExploitationThreshold = 0.1f;
+            if (_episodeCounter < 300) explorationExploitationThreshold = 0.25f;
+            if (_episodeCounter < 400) explorationExploitationThreshold = 0.45f;
+            if (_episodeCounter < 500) explorationExploitationThreshold = 0.55f;
+            if (_episodeCounter < 600) explorationExploitationThreshold = 0.65f;
+            if (_episodeCounter < 700) explorationExploitationThreshold = 0.75f;
+            if (_episodeCounter >= 700) explorationExploitationThreshold = .9f;
             yield return new WaitForSeconds(waitTime);
         }
     }
@@ -91,6 +111,7 @@ public class Agent : MonoBehaviour
         UpdateEpisodeText();
         Debug.Log("Restarting");
         _stepCounter = 0;
+        training.ETable.ClearETable();
         yield return new WaitForSeconds(.5f);
         StartCoroutine(BeginGridWorld());
     }
@@ -134,12 +155,10 @@ public class Agent : MonoBehaviour
     private int ExploreOrExploit()
     {
         var explorationOrExploitation = Random.Range(0f, 1f);
-        return explorationOrExploitation < explorationExploitationThreshold ? Exploit() : Explore();
-        /*if (_episodeCounter < maxEpisodes * .01f)
-            return Explore();
+        if(shouldTrain)
+            return explorationOrExploitation < explorationExploitationThreshold ? Exploit() : Explore();
         
-        var explorationOrExploitation = Random.Range(0f, 1f);
-        return explorationOrExploitation < .33f ? Exploit() : Explore();*/
+        return Exploit();
     }
 
 
@@ -152,7 +171,6 @@ public class Agent : MonoBehaviour
     {
         var agentPosition = transform.position;
         var playerOutOfBounds = agentPosition.x is < 0 or > 19 || agentPosition.y is < 0 or > 19;
-        
         if (playerOutOfBounds || PlayerHitWallInGrid())
         {
             return -1;
@@ -172,7 +190,7 @@ public class Agent : MonoBehaviour
     /// <returns></returns>
     private int CheckPositionForReward(Vector3 agentPosition)
     {
-        var playerOutOfBounds = agentPosition.x is < 0 or > 19 || agentPosition.y is < 0 or > 19;
+        var playerOutOfBounds = agentPosition.x < 0 || agentPosition.x > 19 || agentPosition.y < 0 || agentPosition.y > 19;
         
         if (playerOutOfBounds || PlayerHitWallInGrid())
         {
@@ -261,17 +279,19 @@ public class Agent : MonoBehaviour
     {
         Debug.Log("~Exploring~");
         var movementDirection = GetRandomMove();
+        var nextAction = movementDirection;
         var currentPos = transform.position;
         var nextPos = GetNextPosition(movementDirection);
-        // dont move the agent but just check the next state
-        //UpdatePositionOnGrid(movementDirection);
-        var reward = CheckPositionForReward(nextPos);
-        // Debug.Log($"curPos: {currentPos}, nextPos: {nextPos}, CheckPosReward(nextPos): {CheckPositionForReward(nextPos)}, currAct: {_currentAction}, moveDir: {movementDirection}");
-        training.UpdateQTable(currentPos, nextPos, CheckPositionForReward(nextPos), _currentAction, movementDirection);
+        if (_currentAction != null)
+        {
+            training.UpdateQTableAndETable(currentPos, nextPos, CheckPositionForReward(nextPos),
+                _currentAction, nextAction);
+        }
         if (!(Vector3.Distance(nextPos, currentPos) < .01))
         {
             UpdatePositionOnGrid(movementDirection);
         }
+        _currentAction = nextAction;
         return CheckPositionForReward();
     }
 
@@ -284,13 +304,19 @@ public class Agent : MonoBehaviour
         var position = transform.position;
         var qTableEntry = _qTable._qTable[(int) position.x, (int) position.y];
         var nextDirection = GetBestMoveFromQTable(qTableEntry);
+        var nextAction = nextDirection;
         var nextPosition = GetNextPosition(nextDirection);
         var reward = CheckPositionForReward();
-        training.UpdateQTable(position, nextPosition, reward, _currentAction, nextDirection);
+        if (_currentAction != null)
+        {
+            training.UpdateQTableAndETable(position, nextPosition, reward, _currentAction, nextAction);
+        }
         if (!(Vector3.Distance(nextPosition, position) < .01))
         {
             UpdatePositionOnGrid(nextDirection);
         }
+
+        _currentAction = nextAction;
         return CheckPositionForReward();
     }
 
@@ -332,9 +358,9 @@ public class Agent : MonoBehaviour
 
     private Direction GetBestMoveFromQTable(QTableEntry qTableEntry)
     {
-        var moveValues = qTableEntry.moveValues;
+        var index = Array.IndexOf(qTableEntry.moveValues, qTableEntry.moveValues.Max());
+        /*var moveValues = qTableEntry.moveValues;
         var highestAction = moveValues[0];
-        var index = 0;
         for (int i = 1; i < moveValues.Length; i++)
         {
             if (moveValues[i] > highestAction)
@@ -342,8 +368,7 @@ public class Agent : MonoBehaviour
                 highestAction = moveValues[i];
                 index = i;
             }
-        }
-
+        }*/
         switch (index)
         {
             case 0:
@@ -377,25 +402,21 @@ public class Agent : MonoBehaviour
         {
             case Direction.Up:
             {
-                _currentAction = Direction.Up;
                 transform.position += Vector3.up;
                 break;
             }
             case Direction.Down:
             {
-                _currentAction = Direction.Down;
                 transform.position += Vector3.down;
                 break;
             }
             case Direction.Left:
             {
-                _currentAction = Direction.Left;
                 transform.position += Vector3.left;
                 break;
             }
             case Direction.Right:
             {
-                _currentAction = Direction.Right;
                 transform.position += Vector3.right;
                 break;
             }
@@ -417,6 +438,14 @@ public class Agent : MonoBehaviour
     private QTable LoadQTable()
     {
         var newQTable = _qTable.LoadQTable();
+        Debug.Log("QTable Loaded");
         return newQTable;
+    }
+
+    public void HandleStopTraining()
+    {
+        StopAllCoroutines();
+        shouldTrain = !shouldTrain;
+        StartCoroutine(RestartGridWorld());
     }
 }
