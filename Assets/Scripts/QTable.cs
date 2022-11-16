@@ -20,7 +20,7 @@ public class QTable
                 for (int k = 0; k < 4; k++)
                 {
                     // index 0: Up, index 1: Down, index 2: Left, index 3: Right
-                    initialMoveValues[k] = Random.Range(0.0001f, .0005f);
+                    initialMoveValues[k] = Random.Range(0.001f, .01f);
                 }
 
                 // reverse j and i to mimick the player moving left to right and then up a row
@@ -77,7 +77,7 @@ public class QTable
                 streamWriter.WriteLine(stateString+"/"+valuesString);
             }
         }
-        // CLOSE THE WRITER!!!!
+        // Would not finish writing all of the lines to the text file if left open
         streamWriter.Close();
         Debug.Log("Finished Saving QTable");
     }

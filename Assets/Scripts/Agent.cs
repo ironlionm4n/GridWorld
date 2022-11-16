@@ -1,10 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using TMPro;
-using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.UI;
 using Debug = UnityEngine.Debug;
@@ -14,10 +12,10 @@ public enum Direction {Up, Down, Left, Right}
 
 public class Agent : MonoBehaviour
 {
-    [SerializeField]
-    private float explorationExploitationThreshold = .99f;
+    public float maxEpisodes;
+    
+    [SerializeField] private float explorationExploitationThreshold = 0f;
     [SerializeField] private float waitTime;
-    [SerializeField] private float maxEpisodes;
     [SerializeField] private GameObject goal;
     [SerializeField] private List<Transform> wallsInGrid;
     [SerializeField] private Slider timeSlider;
@@ -26,7 +24,9 @@ public class Agent : MonoBehaviour
     [SerializeField] private Button loadButton;
     [SerializeField] private Training training;
     [SerializeField] private TMP_Text episodeText;
-    [SerializeField] private int maxStepsPerEpisode;
+    [SerializeField] private ArrowManager arrowManager;
+    [SerializeField] private bool shouldTrain = true;
+    [SerializeField] private float restartTime;
     private QTable _qTable;
     public QTable QTable => _qTable;
     private bool _hasHitWall = false;
@@ -34,10 +34,10 @@ public class Agent : MonoBehaviour
     private Direction _currentAction;
     private int _episodeCounter = 0;
     private int _stepCounter = 0;
-    private bool shouldTrain = true;
 
     private void Awake()
     {
+        // initialize qTable once
         _qTable = new QTable();
     }
 
@@ -53,49 +53,35 @@ public class Agent : MonoBehaviour
 
     private void Start()
     {
-        Debug.Log(timeSlider.value);
+        // wait time adjusts how fast the agent waits to move
         waitTime = timeSlider.value;
-        StartCoroutine(BeginGridWorld());
     }
 
     private IEnumerator BeginGridWorld()
     {
+        // randomly choose starting position
         SetAgentStartingPosition();
         while (_episodeCounter < maxEpisodes)
         {
-            if (_stepCounter >= maxStepsPerEpisode)
-            {
-                StopAllCoroutines();
-                StartCoroutine(RestartGridWorld());
-            }
+            // get the reward from the explore or exploit behavior
             var reward = ExploreOrExploit();
             _stepCounter++;
             if (reward == -1)
             {
-                Debug.LogWarning("Agent Hit Wall");
                 _hasHitWall = true;
                 // need to do q table stuff
                 // restart agent with new position
                 StopAllCoroutines();
                 StartCoroutine(RestartGridWorld());
             }
-            if (reward == 10)
+            if (reward == 1)
             {
-                Debug.Log("Agent Found Goal");
                 _hasHitGoal = true;
                 StopAllCoroutines();
                 StartCoroutine(RestartGridWorld());
             }
-            //explorationExploitationThreshold = Mathf.Log( (_episodeCounter / maxEpisodes * 100) + 1f, maxEpisodes);
-            //explorationExploitationThreshold += .15f;
-            if (_episodeCounter < 100) explorationExploitationThreshold = 0;
-            if (_episodeCounter < 200) explorationExploitationThreshold = 0.1f;
-            if (_episodeCounter < 300) explorationExploitationThreshold = 0.25f;
-            if (_episodeCounter < 400) explorationExploitationThreshold = 0.45f;
-            if (_episodeCounter < 500) explorationExploitationThreshold = 0.55f;
-            if (_episodeCounter < 600) explorationExploitationThreshold = 0.65f;
-            if (_episodeCounter < 700) explorationExploitationThreshold = 0.75f;
-            if (_episodeCounter >= 700) explorationExploitationThreshold = .9f;
+            explorationExploitationThreshold = Mathf.Log( (_episodeCounter / maxEpisodes * 100) + 1f, maxEpisodes);
+            explorationExploitationThreshold += .1f;
             yield return new WaitForSeconds(waitTime);
         }
     }
@@ -107,12 +93,12 @@ public class Agent : MonoBehaviour
 
     private IEnumerator RestartGridWorld()
     {
+        arrowManager.DestroyArrowsOnRestart();
         _episodeCounter++;
         UpdateEpisodeText();
-        Debug.Log("Restarting");
         _stepCounter = 0;
         training.ETable.ClearETable();
-        yield return new WaitForSeconds(.5f);
+        yield return new WaitForSeconds(restartTime);
         StartCoroutine(BeginGridWorld());
     }
 
@@ -157,8 +143,8 @@ public class Agent : MonoBehaviour
         var explorationOrExploitation = Random.Range(0f, 1f);
         if(shouldTrain)
             return explorationOrExploitation < explorationExploitationThreshold ? Exploit() : Explore();
-        
-        return Exploit();
+        explorationOrExploitation = Random.Range(0f, 1f);
+        return explorationOrExploitation < .2f ? Explore() : Exploit();
     }
 
 
@@ -178,7 +164,7 @@ public class Agent : MonoBehaviour
 
         if (Vector3.Distance(agentPosition, goal.transform.position) < .001f)
         {
-            return 10;
+            return 1;
         }
 
         return 0;
@@ -289,7 +275,12 @@ public class Agent : MonoBehaviour
         }
         if (!(Vector3.Distance(nextPos, currentPos) < .01))
         {
+            // arrowManager.PlaceArrow((float) training.ETable[20 * (int) currentPos.x + (int) currentPos.y, movementDirection], movementDirection, currentPos);
+            arrowManager.PlaceArrow(_qTable._qTable[(int) currentPos.x, (int) currentPos.y].moveValues[(int) movementDirection],movementDirection, currentPos);
+            /*Debug.Log($"qTableValue: {_qTable._qTable[(int) currentPos.x, (int) currentPos.y].moveValues[(int) movementDirection]}, " +
+                      $"currentPosX: {currentPos.x}, currentPosY: {currentPos.y}");*/
             UpdatePositionOnGrid(movementDirection);
+            
         }
         _currentAction = nextAction;
         return CheckPositionForReward();
@@ -301,18 +292,20 @@ public class Agent : MonoBehaviour
     private int Exploit()
     {
         Debug.Log("^Exploiting^");
-        var position = transform.position;
-        var qTableEntry = _qTable._qTable[(int) position.x, (int) position.y];
+        var currentPos = transform.position;
+        var qTableEntry = _qTable._qTable[(int) currentPos.x, (int) currentPos.y];
         var nextDirection = GetBestMoveFromQTable(qTableEntry);
         var nextAction = nextDirection;
         var nextPosition = GetNextPosition(nextDirection);
         var reward = CheckPositionForReward();
         if (_currentAction != null)
         {
-            training.UpdateQTableAndETable(position, nextPosition, reward, _currentAction, nextAction);
+            training.UpdateQTableAndETable(currentPos, nextPosition, reward, _currentAction, nextAction);
         }
-        if (!(Vector3.Distance(nextPosition, position) < .01))
+        if (!(Vector3.Distance(nextPosition, currentPos) < .01))
         {
+            // arrowManager.PlaceArrow((float) training.ETable[20 * (int) currentPos.x + (int) currentPos.y, nextDirection], nextDirection, currentPos);
+            arrowManager.PlaceArrow(_qTable._qTable[(int) currentPos.x, (int) currentPos.y].moveValues[(int) nextDirection], nextDirection, currentPos);
             UpdatePositionOnGrid(nextDirection);
         }
 
@@ -350,6 +343,7 @@ public class Agent : MonoBehaviour
             default:
             {
                 Debug.LogWarning("Default case of GetNextPosition");
+                Debug.Break();
                 return Vector3.zero;
             }
         }
@@ -359,16 +353,6 @@ public class Agent : MonoBehaviour
     private Direction GetBestMoveFromQTable(QTableEntry qTableEntry)
     {
         var index = Array.IndexOf(qTableEntry.moveValues, qTableEntry.moveValues.Max());
-        /*var moveValues = qTableEntry.moveValues;
-        var highestAction = moveValues[0];
-        for (int i = 1; i < moveValues.Length; i++)
-        {
-            if (moveValues[i] > highestAction)
-            {
-                highestAction = moveValues[i];
-                index = i;
-            }
-        }*/
         switch (index)
         {
             case 0:
@@ -389,6 +373,8 @@ public class Agent : MonoBehaviour
             }
             default:
             {
+                Debug.Log("Default case hit in GetBestMove");
+                Debug.Break();
                 return Direction.Up;
             }
         }

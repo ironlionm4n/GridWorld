@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using UnityEngine;
 
 /// <summary>The e-table is tracking the eligibility for each space to 
 /// be updated, so it should be set to 1 when that state/action pair is visited and reduced by lambda each step 
@@ -22,6 +23,7 @@ public class ETable
             eTable[i] = new Dictionary<Direction, double>();
             foreach (Direction action in Enum.GetValues(typeof(Direction)))
             {
+                // Debug.Log($"action foreach etable: {action}"); // Up, Down, Left, Right
                 eTable[i][action] = 0;
             }
         }
